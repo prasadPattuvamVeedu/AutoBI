@@ -1,16 +1,10 @@
-import os
-
-Allowed_Da
-
-
-
 def validate_dataset_file(file):
     """
     Validate an uploaded dataset file.
 
     Later this will check supported CSV/Excel file types and file size limits.
     """
-    
+    return None
 
 
 def read_dataset_file(file_path):
