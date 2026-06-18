@@ -10,3 +10,7 @@ requests
 pandas
 openpyxl
 xlrd
+scipy
+scikit-learn
+statsmodels
+openpyxl

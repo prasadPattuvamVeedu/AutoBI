@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from .views import (
     DatasetDetailView,
@@ -15,4 +15,5 @@ urlpatterns = [
     path("<int:id>/", DatasetDetailView.as_view(), name="dataset-detail"),
     path("<int:id>/preview/", DatasetPreviewView.as_view(), name="dataset-preview"),
     path("<int:id>/profile/", DatasetProfileView.as_view(), name="dataset-profile"),
+    path("<int:id>/cleaning/", include("apps.cleaning.urls")),
 ]

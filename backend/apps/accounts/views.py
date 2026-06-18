@@ -65,8 +65,8 @@ class GoogleAuthView(APIView):
 
         if not settings.GOOGLE_CLIENT_ID:
             return Response(
-                {"detail": "Google login is not configured."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {"detail": "GOOGLE_CLIENT_ID is missing from backend configuration."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:

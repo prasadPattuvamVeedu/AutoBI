@@ -63,6 +63,20 @@ class AuthApiTests(APITestCase):
         response = self.client.get(reverse("profile"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    @override_settings(GOOGLE_CLIENT_ID="")
+    def test_google_login_returns_clear_error_when_client_id_missing(self):
+        response = self.client.post(
+            reverse("google_auth"),
+            {"credential": "GOOGLE_ID_TOKEN"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "GOOGLE_CLIENT_ID is missing from backend configuration.",
+        )
+
     @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
     @patch("apps.accounts.views.id_token.verify_oauth2_token")
     def test_google_login_creates_user_and_returns_tokens(self, mock_verify):

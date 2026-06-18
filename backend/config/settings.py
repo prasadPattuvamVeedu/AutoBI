@@ -20,6 +20,9 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me-to-at-least-32-ch
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+DATASET_LARGE_FILE_WARNING_BYTES = int(
+    os.getenv("DATASET_LARGE_FILE_WARNING_BYTES", str(50 * 1024 * 1024))
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
