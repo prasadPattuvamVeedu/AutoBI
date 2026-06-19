@@ -42,6 +42,8 @@ INSTALLED_APPS = [
     "apps.datasets",
     "apps.profiling",
     "apps.cleaning",
+    "apps.preprocessing",
+    "apps.charts",
     "apps.statistics_engine",
     "apps.ml_engine",
     "apps.text_analytics",

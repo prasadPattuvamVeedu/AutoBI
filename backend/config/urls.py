@@ -12,6 +12,10 @@ urlpatterns = [
     path("api/auth/", include("apps.accounts.urls")),
     path("api/datasets/", include("apps.datasets.urls")),
     path("api/profiling/", include("apps.profiling.urls")),
+    path("api/cleaning/<int:id>/", include("apps.cleaning.urls")),
+    path("api/preprocessing/", include("apps.preprocessing.urls")),
+    path("api/charts/", include("apps.charts.urls")),
+    path("api/dashboards/", include("apps.dashboards.urls")),
 ]
 
 if settings.DEBUG:

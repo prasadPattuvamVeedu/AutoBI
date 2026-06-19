@@ -176,6 +176,83 @@ def _safe_sample_values(series, limit=5):
     return values
 
 
+def _empty_numeric_stats():
+    return {
+        "mean": None,
+        "median": None,
+        "mode": None,
+        "min": None,
+        "max": None,
+        "range": None,
+        "std": None,
+        "variance": None,
+        "cv": None,
+        "coefficient_of_variation": None,
+        "skewness": None,
+        "kurtosis": None,
+        "outlier_count": None,
+        "outlier_percentage": None,
+        "zero_count": None,
+        "negative_count": None,
+    }
+
+
+def _safe_numeric_stats(series, is_numeric):
+    if not is_numeric:
+        return _empty_numeric_stats()
+
+    numeric_series = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric_series.empty:
+        return _empty_numeric_stats()
+
+    mean = numeric_series.mean()
+    median = numeric_series.median()
+    mode_values = numeric_series.mode()
+    mode = mode_values.iloc[0] if not mode_values.empty else None
+    min_value = numeric_series.min()
+    max_value = numeric_series.max()
+    value_range = max_value - min_value
+    std = numeric_series.std()
+    variance = numeric_series.var()
+
+    cv = None
+    if mean is not None and not pd.isna(mean) and mean != 0 and not pd.isna(std):
+        cv = std / mean
+
+    skewness = numeric_series.skew() if len(numeric_series) > 2 else None
+    kurtosis = numeric_series.kurt() if len(numeric_series) > 3 else None
+
+    percentile_25 = numeric_series.quantile(0.25)
+    percentile_75 = numeric_series.quantile(0.75)
+    iqr = percentile_75 - percentile_25
+    lower_bound = percentile_25 - 1.5 * iqr
+    upper_bound = percentile_75 + 1.5 * iqr
+    outliers = numeric_series[(numeric_series < lower_bound) | (numeric_series > upper_bound)]
+    outlier_count = int(outliers.count())
+    outlier_percentage = round((outlier_count / int(numeric_series.count())) * 100, 2)
+
+    return make_json_safe(
+        {
+            "mean": float(mean) if not pd.isna(mean) else None,
+            "median": float(median) if not pd.isna(median) else None,
+            "mode": float(mode) if mode is not None and not pd.isna(mode) else None,
+            "min": float(min_value) if not pd.isna(min_value) else None,
+            "max": float(max_value) if not pd.isna(max_value) else None,
+            "range": float(value_range) if not pd.isna(value_range) else None,
+            "std": float(std) if not pd.isna(std) else None,
+            "variance": float(variance) if not pd.isna(variance) else None,
+            "cv": float(cv) if cv is not None and not pd.isna(cv) else None,
+            "coefficient_of_variation": float(cv) if cv is not None and not pd.isna(cv) else None,
+            "skewness": float(skewness) if skewness is not None and not pd.isna(skewness) else None,
+            "kurtosis": float(kurtosis) if kurtosis is not None and not pd.isna(kurtosis) else None,
+            "outlier_count": outlier_count,
+            "outlier_percentage": float(outlier_percentage),
+            "zero_count": int((numeric_series == 0).sum()),
+            "negative_count": int((numeric_series < 0).sum()),
+        }
+    )
+
+
 def detect_column_type(series, column_name, row_count):
     column_name_str = str(column_name)
     column_name_lower = column_name_str.lower()
@@ -191,6 +268,7 @@ def detect_column_type(series, column_name, row_count):
     is_constant = unique_count == 1 and not is_empty
 
     is_numeric = pd.api.types.is_numeric_dtype(series)
+    numeric_stats = _safe_numeric_stats(series, is_numeric)
     is_boolean_dtype = pd.api.types.is_bool_dtype(series)
     is_datetime_dtype = pd.api.types.is_datetime64_any_dtype(series)
     is_text = pd.api.types.is_string_dtype(series)
@@ -366,6 +444,22 @@ def detect_column_type(series, column_name, row_count):
             "unique_count": unique_count,
             "unique_percentage": unique_percentage,
             "sample_values": sample_values,
+            "mean": numeric_stats["mean"],
+            "median": numeric_stats["median"],
+            "mode": numeric_stats["mode"],
+            "min": numeric_stats["min"],
+            "max": numeric_stats["max"],
+            "range": numeric_stats["range"],
+            "std": numeric_stats["std"],
+            "variance": numeric_stats["variance"],
+            "cv": numeric_stats["cv"],
+            "coefficient_of_variation": numeric_stats["coefficient_of_variation"],
+            "skewness": numeric_stats["skewness"],
+            "kurtosis": numeric_stats["kurtosis"],
+            "outlier_count": numeric_stats["outlier_count"],
+            "outlier_percentage": numeric_stats["outlier_percentage"],
+            "zero_count": numeric_stats["zero_count"],
+            "negative_count": numeric_stats["negative_count"],
             "is_id_like": is_id_like,
             "is_constant": is_constant,
             "is_high_cardinality": is_high_cardinality,

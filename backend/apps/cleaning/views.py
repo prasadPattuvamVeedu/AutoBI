@@ -3,9 +3,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.cleaning.serializers import CleaningApplySerializer, DatasetRollbackSerializer
+from apps.cleaning.serializers import (
+    CleaningApplySerializer,
+    DatasetRollbackSerializer,
+    OutlierPreviewRequestSerializer,
+)
 from apps.cleaning.services import (
     apply_cleaning_actions,
+    build_outlier_preview,
     build_cleaning_report,
     rollback_to_version,
 )
@@ -54,6 +59,31 @@ class DatasetCleaningApplyView(BaseDatasetCleaningView):
 
         serialized_version = DatasetVersionSerializer(version)
         return Response(serialized_version.data, status=status.HTTP_201_CREATED)
+
+
+class DatasetOutlierPreviewView(BaseDatasetCleaningView):
+    def post(self, request, id):
+        dataset = self.get_dataset(id, request.user)
+        if dataset is None:
+            return Response({"detail": "Dataset not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = OutlierPreviewRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        column_name = serializer.validated_data["column_name"]
+        method = serializer.validated_data["method"]
+        params = serializer.validated_data.get("params", {})
+
+        try:
+            preview = build_outlier_preview(
+                dataset, 
+                column_name=column_name, 
+                method=method, 
+                params=params
+            )
+            return Response(preview)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class DatasetVersionsView(BaseDatasetCleaningView):

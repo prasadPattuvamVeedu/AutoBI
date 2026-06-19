@@ -20,7 +20,13 @@ class DatasetVersionSerializer(serializers.ModelSerializer):
             "version_number",
             "file",
             "is_cleaned",
+            "version_type",
+            "parent_version",
+            "preview_rows",
+            "columns",
             "transformation_log",
+            "transformation_plan_json",
+            "is_active",
             "created_at",
         )
         read_only_fields = fields
@@ -69,36 +75,183 @@ class DatasetSerializer(serializers.ModelSerializer):
 class DatasetDetailSerializer(DatasetSerializer):
     versions = DatasetVersionSerializer(many=True, read_only=True)
     columns = ColumnSchemaSerializer(many=True, read_only=True)
+    schema_json = serializers.SerializerMethodField()
     preview_json = serializers.SerializerMethodField()
     profile_json = serializers.SerializerMethodField()
+    latest_cleaned_version = serializers.SerializerMethodField()
+    latest_feature_engineered_version = serializers.SerializerMethodField()
+    active_version_type = serializers.SerializerMethodField()
+    active_version_id = serializers.SerializerMethodField()
+    active_preview_rows = serializers.SerializerMethodField()
+    active_columns = serializers.SerializerMethodField()
+    active_processing_stage = serializers.SerializerMethodField()
 
     class Meta(DatasetSerializer.Meta):
         fields = DatasetSerializer.Meta.fields + (
+            "schema_json",
             "preview_json",
             "profile_json",
             "versions",
             "columns",
+            "latest_cleaned_version",
+            "latest_feature_engineered_version",
+            "active_version_type",
+            "active_version_id",
+            "active_preview_rows",
+            "active_columns",
+            "active_processing_stage",
         )
 
-    def get_preview_json(self, obj):
-        if not obj.file:
+    def _get_latest_cleaned_version(self, obj):
+        return (
+            obj.versions.filter(
+                is_cleaned=True,
+                version_type=DatasetVersion.VERSION_TYPE_CLEANED,
+                is_active=True,
+                file__isnull=False,
+            )
+            .exclude(file="")
+            .order_by("-version_number")
+            .first()
+        )
+
+    def _get_latest_feature_engineered_version(self, obj):
+        return (
+            obj.versions.filter(
+                version_type=DatasetVersion.VERSION_TYPE_FEATURE_ENGINEERED,
+                is_active=True,
+                file__isnull=False,
+            )
+            .exclude(file="")
+            .order_by("-version_number")
+            .first()
+        )
+
+    def _get_active_version(self, obj):
+        return self._get_latest_feature_engineered_version(obj) or self._get_latest_cleaned_version(obj)
+
+    def _build_file_preview(self, file_field, limit=20):
+        if not file_field:
             return {"columns": [], "rows": []}
 
         try:
-            obj.file.open("rb")
-            df = read_dataset_file(obj.file)
+            file_field.open("rb")
+            df = read_dataset_file(file_field)
         except ValueError:
             return {"columns": [], "rows": []}
         finally:
-            obj.file.close()
+            file_field.close()
 
-        return build_preview(df, limit=20)
+        return build_preview(df, limit=limit)
+
+    def _normalize_schema_rows(self, value):
+        if not value:
+            return []
+
+        if isinstance(value, list):
+            return value
+
+        if isinstance(value, dict):
+            normalized_rows = []
+            for key, row in value.items():
+                if isinstance(row, dict):
+                    row_data = dict(row)
+                    row_data.setdefault("column_name", key)
+                    normalized_rows.append(row_data)
+                else:
+                    normalized_rows.append({"column_name": key, "detected_type": row})
+            return normalized_rows
+
+        return []
+
+    def _first_schema_rows(self, *values):
+        for value in values:
+            rows = self._normalize_schema_rows(value)
+            if rows:
+                return rows
+        return []
+
+    def get_schema_json(self, obj):
+        profile_json = self.get_profile_json(obj)
+        preview_json = self.get_preview_json(obj)
+        preview_columns = preview_json.get("columns", []) if isinstance(preview_json, dict) else []
+
+        return self._first_schema_rows(
+            getattr(obj, "schema_json", None),
+            obj.columns_json,
+            profile_json.get("columns") if isinstance(profile_json, dict) else None,
+            profile_json.get("column_profiles") if isinstance(profile_json, dict) else None,
+            [{"column_name": column} for column in preview_columns],
+        )
+
+    def get_preview_json(self, obj):
+        return self._build_file_preview(obj.file, limit=20)
 
     def get_profile_json(self, obj):
         try:
             return obj.profile.profile_json
         except DatasetProfile.DoesNotExist:
             return {}
+
+    def get_latest_cleaned_version(self, obj):
+        version = self._get_latest_cleaned_version(obj)
+        return self._serialize_version_payload(version, "cleaned")
+
+    def get_latest_feature_engineered_version(self, obj):
+        version = self._get_latest_feature_engineered_version(obj)
+        return self._serialize_version_payload(version, "feature_engineered")
+
+    def _serialize_version_payload(self, version, fallback_type):
+        if version is None:
+            return None
+
+        preview = {
+            "columns": version.columns or [],
+            "rows": version.preview_rows or [],
+        }
+        if not preview["columns"] and not preview["rows"]:
+            preview = self._build_file_preview(version.file, limit=20)
+
+        return {
+            "id": version.id,
+            "version_number": version.version_number,
+            "version_type": version.version_type or fallback_type,
+            "parent_version_id": version.parent_version_id,
+            "is_cleaned": version.is_cleaned,
+            "is_active": version.is_active,
+            "created_at": version.created_at,
+            "preview_rows": preview.get("rows", []),
+            "columns": preview.get("columns", []),
+            "transformation_log": version.transformation_log,
+            "transformation_plan_json": version.transformation_plan_json,
+        }
+
+    def get_active_version_type(self, obj):
+        version = self._get_active_version(obj)
+        return version.version_type if version is not None else "original"
+
+    def get_active_version_id(self, obj):
+        version = self._get_active_version(obj)
+        return version.id if version is not None else None
+
+    def get_active_preview_rows(self, obj):
+        version = self._get_active_version(obj)
+        if version is not None:
+            if version.preview_rows:
+                return version.preview_rows
+            return self._build_file_preview(version.file, limit=20).get("rows", [])
+        return self.get_preview_json(obj).get("rows", [])
+
+    def get_active_columns(self, obj):
+        version = self._get_active_version(obj)
+        if version is not None:
+            if version.columns:
+                return version.columns
+            return self._build_file_preview(version.file, limit=20).get("columns", [])
+        return self.get_preview_json(obj).get("columns", [])
+
+    def get_active_processing_stage(self, obj):
+        return self.get_active_version_type(obj)
 
 
 class DatasetUploadSerializer(serializers.Serializer):

@@ -19,22 +19,34 @@ from scipy.stats.mstats import winsorize
 from django.core.files.base import ContentFile
 
 from apps.datasets.models import DatasetVersion
-from apps.datasets.services import make_json_safe, read_dataset_file
+from apps.datasets.services import build_preview, make_json_safe, read_dataset_file
 from apps.profiling.services import build_dataset_profile_response, detect_column_type
+
+
+def get_latest_cleaned_dataset_version(dataset):
+    return (
+        DatasetVersion.objects.filter(
+            dataset=dataset,
+            is_cleaned=True,
+            version_type=DatasetVersion.VERSION_TYPE_CLEANED,
+            is_active=True,
+            file__isnull=False,
+        )
+        .exclude(file="")
+        .order_by("-version_number")
+        .first()
+    )
 
 
 def load_dataset_dataframe(dataset):
     """
-    Load the most recent dataset file for cleaning reports and transformations.
-    If one or more DatasetVersion objects exist for this dataset, use the latest
-    version file so reports reflect the current working dataset state.
+    Load the active cleaned working file for cleaning reports and transformations.
+    If one or more cleaned DatasetVersion objects exist for this dataset, use the
+    latest cleaned file so each new approved action builds on the current working
+    dataset state.
     Otherwise fall back to the original uploaded dataset file.
     """
-    latest_version = (
-        DatasetVersion.objects.filter(dataset=dataset)
-        .order_by("-version_number")
-        .first()
-    )
+    latest_version = get_latest_cleaned_dataset_version(dataset)
 
     if latest_version and latest_version.file:
         with latest_version.file.open("rb") as f:
@@ -738,6 +750,229 @@ def analyze_zipcode_issues(profile):
     return zipcode_issues
 
 
+def calculate_outlier_preview(series, method, params=None):
+    """
+    Preview outlier count/percentage for the selected detection method.
+    This function does not clean, cap, remove, or transform data.
+
+    Supported detection methods:
+    - iqr_detection
+    - zscore_detection
+    - modified_zscore_detection
+
+    Transformation methods such as iqr_capping, winsorization,
+    percentile_capping, log_transform, and removals return the same
+    preview rule they are based on or raise a clear validation error.
+    """
+    params = params or {}
+
+    numeric_series = pd.to_numeric(series, errors="coerce").dropna()
+    total_count = int(numeric_series.count())
+
+    if total_count == 0:
+        return {
+            "method": method,
+            "outlier_count": 0,
+            "outlier_percentage": 0.0,
+            "lower_bound": None,
+            "upper_bound": None,
+            "threshold": None,
+            "message": "No numeric values available for outlier preview.",
+        }
+
+    # Map transformation methods to their preview/detection base.
+    preview_method = method
+    if method in ["iqr_capping"]:
+        preview_method = "iqr_detection"
+    elif method in ["zscore_removal"]:
+        preview_method = "zscore_detection"
+    elif method in ["winsorization", "percentile_capping"]:
+        preview_method = "percentile_detection"
+    elif method in ["log_transform", "ignore"]:
+        return {
+            "method": method,
+            "preview_method": method,
+            "outlier_count": 0,
+            "outlier_percentage": 0.0,
+            "lower_bound": None,
+            "upper_bound": None,
+            "threshold": None,
+            "message": "This method is a transformation/ignore option and does not have a direct outlier preview count.",
+        }
+
+    if preview_method == "iqr_detection":
+        multiplier = params.get("iqr_multiplier", 1.5)
+
+        q1 = numeric_series.quantile(0.25)
+        q3 = numeric_series.quantile(0.75)
+        iqr = q3 - q1
+
+        if pd.isna(iqr) or iqr == 0:
+            return {
+                "method": method,
+                "preview_method": preview_method,
+                "outlier_count": 0,
+                "outlier_percentage": 0.0,
+                "lower_bound": None,
+                "upper_bound": None,
+                "threshold": multiplier,
+                "message": "IQR is zero or unavailable, so IQR outliers cannot be detected.",
+            }
+
+        lower_bound = q1 - multiplier * iqr
+        upper_bound = q3 + multiplier * iqr
+
+        outliers = numeric_series[
+            (numeric_series < lower_bound) | (numeric_series > upper_bound)
+        ]
+
+        outlier_count = int(outliers.count())
+
+        return {
+            "method": method,
+            "preview_method": preview_method,
+            "outlier_count": outlier_count,
+            "outlier_percentage": round(float((outlier_count / total_count) * 100), 2),
+            "lower_bound": round(float(lower_bound), 2),
+            "upper_bound": round(float(upper_bound), 2),
+            "threshold": multiplier,
+            "message": "Preview calculated using IQR detection.",
+        }
+
+    if preview_method == "zscore_detection":
+        threshold = params.get("zscore_threshold", 3)
+
+        if numeric_series.std() == 0 or pd.isna(numeric_series.std()):
+            return {
+                "method": method,
+                "preview_method": preview_method,
+                "outlier_count": 0,
+                "outlier_percentage": 0.0,
+                "lower_bound": None,
+                "upper_bound": None,
+                "threshold": threshold,
+                "message": "Standard deviation is zero or unavailable, so Z-score outliers cannot be detected.",
+            }
+
+        z_scores = np.abs(zscore(numeric_series, nan_policy="omit"))
+        outlier_mask = z_scores > threshold
+        outlier_count = int(np.sum(outlier_mask))
+
+        return {
+            "method": method,
+            "preview_method": preview_method,
+            "outlier_count": outlier_count,
+            "outlier_percentage": round(float((outlier_count / total_count) * 100), 2),
+            "lower_bound": None,
+            "upper_bound": None,
+            "threshold": threshold,
+            "message": "Preview calculated using Z-score detection.",
+        }
+
+    if preview_method == "modified_zscore_detection":
+        threshold = params.get("modified_zscore_threshold", 3.5)
+
+        median = numeric_series.median()
+        mad = np.median(np.abs(numeric_series - median))
+
+        if mad == 0 or pd.isna(mad):
+            return {
+                "method": method,
+                "preview_method": preview_method,
+                "outlier_count": 0,
+                "outlier_percentage": 0.0,
+                "lower_bound": None,
+                "upper_bound": None,
+                "threshold": threshold,
+                "message": "MAD is zero or unavailable, so modified Z-score outliers cannot be detected.",
+            }
+
+        modified_z_scores = 0.6745 * (numeric_series - median) / mad
+        outlier_mask = np.abs(modified_z_scores) > threshold
+        outlier_count = int(np.sum(outlier_mask))
+
+        return {
+            "method": method,
+            "preview_method": preview_method,
+            "outlier_count": outlier_count,
+            "outlier_percentage": round(float((outlier_count / total_count) * 100), 2),
+            "lower_bound": None,
+            "upper_bound": None,
+            "threshold": threshold,
+            "message": "Preview calculated using modified Z-score detection.",
+        }
+
+    if preview_method == "percentile_detection":
+        lower_pct = params.get("lower_percentile", 0.01)
+        upper_pct = params.get("upper_percentile", 0.99)
+
+        lower_bound = numeric_series.quantile(lower_pct)
+        upper_bound = numeric_series.quantile(upper_pct)
+
+        outliers = numeric_series[
+            (numeric_series < lower_bound) | (numeric_series > upper_bound)
+        ]
+
+        outlier_count = int(outliers.count())
+
+        return {
+            "method": method,
+            "preview_method": preview_method,
+            "outlier_count": outlier_count,
+            "outlier_percentage": round(float((outlier_count / total_count) * 100), 2),
+            "lower_bound": round(float(lower_bound), 2),
+            "upper_bound": round(float(upper_bound), 2),
+            "threshold": {
+                "lower_percentile": lower_pct,
+                "upper_percentile": upper_pct,
+            },
+            "message": "Preview calculated using percentile bounds.",
+        }
+
+    raise ValueError(f"Unsupported outlier preview method: {method}")
+
+
+def build_outlier_preview(dataset, column_name, method, params=None):
+    """
+    Build an outlier preview for one dataset column and selected method.
+    This is intended for an API view used when the frontend dropdown changes.
+    """
+    df = load_dataset_dataframe(dataset)
+
+    if column_name not in df.columns:
+        raise ValueError(f"Column '{column_name}' does not exist in the dataset.")
+
+    row_count = df.shape[0]
+    detected_type = detect_column_type(column_name, df[column_name], row_count)
+
+    if detected_type != "numeric":
+        return make_json_safe(
+            {
+                "column_name": column_name,
+                "detected_type": detected_type,
+                "method": method,
+                "outlier_count": 0,
+                "outlier_percentage": 0.0,
+                "message": "Outlier preview is only available for true numeric columns.",
+            }
+        )
+
+    preview = calculate_outlier_preview(
+        df[column_name],
+        method,
+        params=params,
+    )
+
+    preview.update(
+        {
+            "column_name": column_name,
+            "detected_type": detected_type,
+        }
+    )
+
+    return make_json_safe(preview)
+
+
 COLUMN_OUTLIER_METHOD_OPTIONS = [
     "iqr_detection",
     "iqr_capping",
@@ -815,6 +1050,15 @@ def suggest_column_outlier_method(profile_column, outlier_item):
         "confidence": confidence,
         "requires_user_confirmation": True,
         "outlier_percentage": round(float(outlier_percentage), 2),
+        "preview_available": True,
+        "preview_methods": [
+            "iqr_detection",
+            "zscore_detection",
+            "modified_zscore_detection",
+            "percentile_capping",
+            "iqr_capping",
+            "zscore_removal",
+        ],
     }
 
 
@@ -1388,7 +1632,25 @@ def apply_cleaning_actions(dataset, actions=None, apply_safe=False):
     )
 
 
+def _get_accumulated_cleaning_actions(version):
+    if version is None:
+        return []
+
+    existing_log = version.transformation_log or {}
+    existing_actions = (
+        existing_log.get("cleaning_plan_json")
+        or existing_log.get("actions")
+        or []
+    )
+    return existing_actions if isinstance(existing_actions, list) else []
+
+
 def save_cleaned_dataset_version(dataset, output_df, transformation_log):
+    source_version = get_latest_cleaned_dataset_version(dataset)
+    accumulated_actions = _get_accumulated_cleaning_actions(source_version)
+    latest_actions = transformation_log or []
+    merged_actions = accumulated_actions + latest_actions
+
     last_version = (
         DatasetVersion.objects
         .filter(dataset=dataset)
@@ -1422,16 +1684,31 @@ def save_cleaned_dataset_version(dataset, output_df, transformation_log):
         name=f"{safe_name}_cleaned_v{version_number}{output_extension}",
     )
 
+    preview = build_preview(output_df, limit=20)
+
     return DatasetVersion.objects.create(
         dataset=dataset,
         version_number=version_number,
         file=cleaned_file,
         is_cleaned=True,
-        transformation_log={
-            "actions": transformation_log,
+        version_type=DatasetVersion.VERSION_TYPE_CLEANED,
+        parent_version=source_version,
+        preview_rows=make_json_safe(preview.get("rows", [])),
+        columns=make_json_safe(preview.get("columns", [])),
+        transformation_plan_json=make_json_safe({
+            "cleaning_plan_json": merged_actions,
+        }),
+        is_active=True,
+        transformation_log=make_json_safe({
+            "actions": merged_actions,
+            "cleaning_plan_json": merged_actions,
+            "latest_actions": latest_actions,
+            "source_version_id": source_version.id if source_version else None,
+            "source_version_number": source_version.version_number if source_version else None,
+            "active_version_type": "cleaned",
             "original_shape": getattr(dataset, "shape", None),
             "cleaned_shape": list(output_df.shape),
-        },
+        }),
     )
 
 
@@ -1476,6 +1753,12 @@ def rollback_to_version(dataset, version_id):
         version_number=version_number,
         file=restored_file,
         is_cleaned=source_version.is_cleaned,
+        version_type=source_version.version_type,
+        parent_version=source_version,
+        preview_rows=source_version.preview_rows,
+        columns=source_version.columns,
+        transformation_plan_json=source_version.transformation_plan_json,
+        is_active=True,
         transformation_log={
             "action": "rollback",
             "rolled_back_version_id": source_version.id,

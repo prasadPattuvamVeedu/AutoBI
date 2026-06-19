@@ -32,9 +32,9 @@ class DatasetAdmin(admin.ModelAdmin):
 
 @admin.register(DatasetVersion)
 class DatasetVersionAdmin(admin.ModelAdmin):
-    list_display = ("id", "dataset", "version_number", "is_cleaned", "created_at")
+    list_display = ("id", "dataset", "version_number", "version_type", "is_cleaned", "is_active", "created_at")
     search_fields = ("dataset__name",)
-    list_filter = ("is_cleaned", "created_at")
+    list_filter = ("version_type", "is_cleaned", "is_active", "created_at")
 
 
 @admin.register(ColumnSchema)

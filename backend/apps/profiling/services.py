@@ -48,7 +48,6 @@ def build_column_statistics(df):
     columns = []
     row_count = df.shape[0]
 
-
     for column_name in df.columns:
         series = df[column_name]
 
@@ -56,19 +55,20 @@ def build_column_statistics(df):
         unique_stats = calculate_unique_stats(series, row_count)
         detected_type = detect_column_type(column_name, series, row_count)
 
-        num_stats = calculate_numeric_stats(series) if detected_type == "numeric" else {}
+        num_stats = calculate_numeric_stats(series) if detected_type in ["numeric", "numeric_categorical"] else {}
         cat_stats = calculate_categorical_stats(series) if detected_type in ["categorical", "numeric_categorical"] else {}
 
         role = detect_column_role(
-            column_name, 
-            detected_type, 
-            missing_stats.get("missing_percentage"), 
-            unique_stats.get("unique_count")
+            column_name,
+            detected_type,
+            missing_stats.get("missing_percentage"),
+            unique_stats.get("unique_count"),
         )
+
         recommendation = generate_column_recommendation(
-            detected_type, 
-            missing_stats.get("missing_percentage"), 
-            unique_stats.get("unique_count")
+            detected_type,
+            missing_stats.get("missing_percentage"),
+            unique_stats.get("unique_count"),
         )
 
         columns.append(
@@ -81,6 +81,7 @@ def build_column_statistics(df):
                 "unique_ratio": unique_stats.get("unique_ratio"),
                 "role": role,
                 "recommendation": recommendation,
+
                 "mean": num_stats.get("mean"),
                 "median": num_stats.get("median"),
                 "mode": num_stats.get("mode") if num_stats.get("mode") is not None else cat_stats.get("mode"),
@@ -88,17 +89,29 @@ def build_column_statistics(df):
                 "max": num_stats.get("max"),
                 "range": num_stats.get("range"),
                 "std": num_stats.get("std"),
+                "variance": num_stats.get("variance"),
+                "coefficient_of_variation": num_stats.get("coefficient_of_variation"),
+                "skewness": num_stats.get("skewness"),
+                "kurtosis": num_stats.get("kurtosis"),
+
+                "percentile_5": num_stats.get("percentile_5"),
                 "percentile_25": num_stats.get("percentile_25"),
                 "percentile_50": num_stats.get("percentile_50"),
                 "percentile_75": num_stats.get("percentile_75"),
+                "percentile_95": num_stats.get("percentile_95"),
                 "iqr": num_stats.get("iqr"),
+
+                "outlier_count": num_stats.get("outlier_count"),
+                "outlier_percentage": num_stats.get("outlier_percentage"),
+                "zero_count": num_stats.get("zero_count"),
+                "negative_count": num_stats.get("negative_count"),
+
                 "top_value": cat_stats.get("top_value"),
                 "top_frequency": cat_stats.get("top_frequency"),
             }
         )
 
     return columns
-
 
 
 def calculate_profile_quality_score(profile):
@@ -310,6 +323,7 @@ def detect_column_type(column_name, series, row_count):
 def calculate_numeric_stats(series):
     numeric_series = pd.to_numeric(series, errors="coerce").dropna()
 
+   
     if numeric_series.empty:
         return {
             "mean": None,
@@ -319,10 +333,22 @@ def calculate_numeric_stats(series):
             "max": None,
             "range": None,
             "std": None,
+            "variance": None,
+            "coefficient_of_variation": None,
+            "percentile_5": None,
             "percentile_25": None,
             "percentile_50": None,
             "percentile_75": None,
+            "percentile_95": None,
             "iqr": None,
+            "skewness": None,
+            "kurtosis": None,
+            "lower_outlier_bound": None,
+            "upper_outlier_bound": None,
+            "outlier_count": None,
+            "outlier_percentage": None,
+            "zero_count": None,
+            "negative_count": None,
         }
 
     mean = numeric_series.mean()
@@ -332,25 +358,63 @@ def calculate_numeric_stats(series):
     max_val = numeric_series.max()
     value_range = max_val - min_val
     std = numeric_series.std()
+    variance = numeric_series.var()
 
+    coefficient_of_variation = None
+    if mean !=0 and not pd.isna(mean):
+        coefficient_of_variation = std/mean
+
+    percentile_5 = numeric_series.quantile(0.05)
     percentile_25 = numeric_series.quantile(0.25)
     percentile_50 = numeric_series.quantile(0.50)
     percentile_75 = numeric_series.quantile(0.75)
+    percentile_95 = numeric_series.quantile(0.95)
+    
     iqr = percentile_75 - percentile_25
+    lower_outlier_bound = percentile_25 - 1.5 * iqr
+    upper_outlier_bound = percentile_75 + 1.5 * iqr
+    
+    outliers = numeric_series[
+        (numeric_series < lower_outlier_bound) |
+        (numeric_series > upper_outlier_bound)
+    ]
+
+    outlier_count = outliers.count()
+    outlier_percentage = _safe_percentage(outlier_count, numeric_series.count())
+
+    skewness = numeric_series.skew() if len(numeric_series) > 2 else None
+    kurtosis = numeric_series.kurt() if len(numeric_series) > 3 else None
+    zero_count = int((numeric_series == 0).sum())
+    negative_count = int((numeric_series < 0).sum())
+
 
     return {
-        "mean": float(mean),
-        "median": float(median),
-        "mode": float(mode) if mode is not None else None,
-        "min": float(min_val),
-        "max": float(max_val),
-        "range": float(value_range),
-        "std": float(std) if not pd.isna(std) else None,
-        "percentile_25": float(percentile_25),
-        "percentile_50": float(percentile_50),
-        "percentile_75": float(percentile_75),
-        "iqr": float(iqr),
-    }
+            "mean": float(mean),
+            "median": float(median),
+            "mode": float(mode) if mode is not None else None,
+            "min": float(min_val),
+            "max": float(max_val),
+            "range": float(value_range),
+            "std": float(std) if not pd.isna(std) else None,
+            "variance": float(variance) if not pd.isna(variance) else None,
+            "coefficient_of_variation": float(coefficient_of_variation)
+            if coefficient_of_variation is not None and not pd.isna(coefficient_of_variation)
+            else None,
+            "percentile_5": float(percentile_5),
+            "percentile_25": float(percentile_25),
+            "percentile_50": float(percentile_50),
+            "percentile_75": float(percentile_75),
+            "percentile_95": float(percentile_95),
+            "iqr": float(iqr),
+            "skewness": float(skewness) if not pd.isna(skewness) else None,
+            "kurtosis": float(kurtosis) if not pd.isna(kurtosis) else None,
+            "lower_outlier_bound": float(lower_outlier_bound),
+            "upper_outlier_bound": float(upper_outlier_bound),
+            "outlier_count": int(outlier_count),
+            "outlier_percentage": float(outlier_percentage),
+            "zero_count": zero_count,
+            "negative_count": negative_count,
+        }
 def calculate_categorical_stats(series):
     
     # Calculate mode, top_value, top_frequency manually here.

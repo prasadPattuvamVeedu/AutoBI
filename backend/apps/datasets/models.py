@@ -82,6 +82,18 @@ class Dataset(models.Model):
 
 
 class DatasetVersion(models.Model):
+    VERSION_TYPE_ORIGINAL = "original"
+    VERSION_TYPE_CLEANED = "cleaned"
+    VERSION_TYPE_FEATURE_ENGINEERED = "feature_engineered"
+    VERSION_TYPE_ML_READY = "ml_ready"
+
+    VERSION_TYPE_CHOICES = [
+        (VERSION_TYPE_ORIGINAL, "Original"),
+        (VERSION_TYPE_CLEANED, "Cleaned"),
+        (VERSION_TYPE_FEATURE_ENGINEERED, "Feature engineered"),
+        (VERSION_TYPE_ML_READY, "ML ready"),
+    ]
+
     dataset = models.ForeignKey(
         Dataset,
         on_delete=models.CASCADE,
@@ -90,7 +102,23 @@ class DatasetVersion(models.Model):
     version_number = models.PositiveIntegerField()
     file = models.FileField(upload_to="dataset_versions/", null=True, blank=True)
     is_cleaned = models.BooleanField(default=False)
+    version_type = models.CharField(
+        max_length=40,
+        choices=VERSION_TYPE_CHOICES,
+        default=VERSION_TYPE_ORIGINAL,
+    )
+    parent_version = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="child_versions",
+        null=True,
+        blank=True,
+    )
+    preview_rows = models.JSONField(default=list, blank=True)
+    columns = models.JSONField(default=list, blank=True)
     transformation_log = models.JSONField(default=dict, blank=True)
+    transformation_plan_json = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

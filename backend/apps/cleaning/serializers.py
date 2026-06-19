@@ -22,3 +22,9 @@ class CleaningApplySerializer(serializers.Serializer):
 
 class DatasetRollbackSerializer(serializers.Serializer):
     version_id = serializers.IntegerField()
+
+
+class OutlierPreviewRequestSerializer(serializers.Serializer):
+    column_name = serializers.CharField()
+    method = serializers.CharField()
+    params = serializers.JSONField(required=False, default=dict)
