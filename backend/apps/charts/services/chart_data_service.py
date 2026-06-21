@@ -369,7 +369,7 @@ def _aggregate_grouped_data(df, x_column, value_column, color_by_column, aggrega
 def _build_grouped_chart(df, payload, chart_type, source_meta):
     settings = payload.get("settings_json") or {}
     x_column = _validate_column(df, payload.get("x_column") or payload.get("dimension"), "X axis")
-    y_column = payload.get("y_column") or payload.get("measure") or payload.get("size_column")
+    y_column = payload.get("y_column") or payload.get("measure")
     aggregation = _normalize_aggregation(payload.get("aggregation") or settings.get("aggregation"))
 
     if aggregation == "count" and not y_column:
@@ -378,8 +378,9 @@ def _build_grouped_chart(df, payload, chart_type, source_meta):
         df[value_column] = 1
     else:
         y_column = _validate_column(df, y_column, "Y axis / value")
-        value_column = _validate_column(df, payload.get("size_column") or y_column, "Bar size / value")
+        value_column = y_column
 
+    size_column = _validate_column(df, payload.get("size_column"), "Size", required=False)
     color_by_column = _validate_column(df, payload.get("color_by_column"), "Color by", required=False)
     default_top_n = 10 if chart_type in {"pie", "donut"} else 20
     top_n = _safe_int(payload.get("top_n") or payload.get("limit") or settings.get("top_n"), default_top_n)
@@ -402,7 +403,7 @@ def _build_grouped_chart(df, payload, chart_type, source_meta):
     if chart_type in {"line", "area"}:
         result_df = result_df.sort_values(by=x_column, kind="mergesort")
 
-    title = payload.get("title") or _build_title(chart_type, x_column, value_column, aggregation)
+    title = payload.get("title") or _build_title(chart_type, x_column, y_column or value_column, aggregation)
     columns = list(result_df.columns)
 
     return {
@@ -412,8 +413,8 @@ def _build_grouped_chart(df, payload, chart_type, source_meta):
             "title": title,
             "chart_type": chart_type,
             "x_column": x_column,
-            "y_column": value_column,
-            "size_column": value_column,
+            "y_column": y_column or value_column,
+            "size_column": size_column,
             "color_by_column": color_by_column,
             "aggregation": aggregation,
             "top_n": top_n,
@@ -437,7 +438,7 @@ def _build_grouped_chart(df, payload, chart_type, source_meta):
             "aggregation": aggregation,
             "top_n": top_n,
             "sort_order": sort_order,
-            "size_column": value_column,
+            "size_column": size_column,
             "color_by_column": color_by_column,
             "source": source_meta,
         },
@@ -504,48 +505,87 @@ def _build_histogram_chart(df, payload, chart_type, source_meta):
     settings = payload.get("settings_json") or {}
     value_column = _validate_column(
         df,
-        payload.get("x_column") or payload.get("y_column") or payload.get("measure"),
-        "Histogram value",
+        payload.get("x_column") or payload.get("dimension") or payload.get("measure"),
+        "Histogram X axis",
     )
-    bins = _safe_int(payload.get("bins") or settings.get("bins"), 20)
-    bins = min(max(bins, 5), 100)
+    color_by_column = _validate_column(df, payload.get("color_by_column"), "Color by", required=False)
+    bins = _safe_int(payload.get("bins") or settings.get("bins"), 10)
+    bins = min(max(bins, 1), 100)
 
-    numeric_series = _numeric_series(df[value_column]).dropna()
-    if numeric_series.empty:
+    work_columns = [value_column] + ([color_by_column] if color_by_column else [])
+    work_df = df[work_columns].copy()
+    work_df[value_column] = _numeric_series(work_df[value_column])
+    work_df = work_df.dropna(subset=[value_column])
+    if work_df.empty:
         raise ChartGenerationError(f"Column '{value_column}' does not contain numeric values for histogram.")
 
-    binned = pd.cut(numeric_series, bins=bins, duplicates="drop")
-    result_df = binned.value_counts(sort=False).reset_index()
-    result_df.columns = ["bin", "count"]
-    result_df["bin"] = result_df["bin"].astype(str)
+    binned = pd.cut(work_df[value_column], bins=bins, duplicates="drop")
+    interval_categories = list(binned.cat.categories)
+    work_df["__histogram_bin__"] = binned
+
+    rows = []
+    if color_by_column:
+        grouped = work_df.dropna(subset=[color_by_column]).groupby(["__histogram_bin__", color_by_column], observed=True).size()
+        for (interval, group), count in grouped.items():
+            if pd.isna(interval):
+                continue
+            rows.append({
+                "bin_start": make_json_safe(interval.left),
+                "bin_end": make_json_safe(interval.right),
+                "label": f"{make_json_safe(interval.left)} - {make_json_safe(interval.right)}",
+                "count": int(count),
+                "group": make_json_safe(group),
+            })
+    else:
+        counts = work_df["__histogram_bin__"].value_counts(sort=False)
+        for interval in interval_categories:
+            count = counts.get(interval, 0)
+            rows.append({
+                "bin_start": make_json_safe(interval.left),
+                "bin_end": make_json_safe(interval.right),
+                "label": f"{make_json_safe(interval.left)} - {make_json_safe(interval.right)}",
+                "count": int(count),
+                "group": None,
+            })
 
     title = payload.get("title") or _build_title("histogram", value_column, "count", "count")
+    columns = ["label", "count", "bin_start", "bin_end", "group"]
     return {
         "dataset_id": df.attrs.get("dataset_id"),
         "chart_type": chart_type,
         "chart_config_json": {
             "title": title,
             "chart_type": chart_type,
-            "x_column": "bin",
+            "x_column": "label",
             "y_column": "count",
+            "x_axis": value_column,
+            "y_axis": "auto_count",
             "source_column": value_column,
+            "color_by_column": color_by_column,
             "aggregation": "count",
             "bins": bins,
         },
         "chart_data_json": {
-            "columns": ["bin", "count"],
-            "rows": _to_records(result_df),
+            "columns": columns,
+            "rows": rows,
+            "bins": rows,
             "meta": {
                 "placeholder": False,
-                "row_count": int(len(result_df)),
+                "row_count": int(len(rows)),
                 "source": source_meta,
                 "value_column": value_column,
+                "color_by_column": color_by_column,
                 "optimized": True,
             },
         },
-        "settings_json": {**settings, "bins": bins, "source": source_meta},
+        "settings_json": {
+            **settings,
+            "aggregation": "count",
+            "bins": bins,
+            "color_by_column": color_by_column,
+            "source": source_meta,
+        },
     }
-
 
 def _build_box_chart(df, payload, chart_type, source_meta):
     settings = payload.get("settings_json") or {}
@@ -1001,3 +1041,4 @@ def generate_chart_data(dataset, payload):
 def generate_placeholder_chart_data(dataset, payload):
     """Backward-compatible name used by older views."""
     return generate_chart_data(dataset, payload)
+

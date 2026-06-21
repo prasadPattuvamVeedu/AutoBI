@@ -1,3 +1,5 @@
+import os
+
 from rest_framework import serializers
 
 from .models import ColumnSchema, Dataset, DatasetProfile, DatasetVersion
@@ -252,6 +254,89 @@ class DatasetDetailSerializer(DatasetSerializer):
 
     def get_active_processing_stage(self, obj):
         return self.get_active_version_type(obj)
+
+
+def _version_stage_label(version_type):
+    labels = {
+        DatasetVersion.VERSION_TYPE_CLEANED: "Cleaning",
+        DatasetVersion.VERSION_TYPE_FEATURE_ENGINEERED: "Feature Engineering",
+        DatasetVersion.VERSION_TYPE_ML_READY: "ML Readiness",
+        DatasetVersion.VERSION_TYPE_ORIGINAL: "Original",
+    }
+    return labels.get(version_type, "Manual Transform")
+
+
+class TransformedDatasetSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    source_dataset_id = serializers.IntegerField(source="dataset_id", read_only=True)
+    source_dataset_name = serializers.CharField(source="dataset.name", read_only=True)
+    rows = serializers.SerializerMethodField()
+    columns_count = serializers.SerializerMethodField()
+    column_count = serializers.SerializerMethodField()
+    file_size = serializers.SerializerMethodField()
+    pipeline_stage = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    preview_json = serializers.SerializerMethodField()
+    schema_json = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DatasetVersion
+        fields = (
+            "id",
+            "name",
+            "source_dataset_id",
+            "source_dataset_name",
+            "version_number",
+            "version_type",
+            "pipeline_stage",
+            "status",
+            "rows",
+            "columns_count",
+            "column_count",
+            "file_size",
+            "is_cleaned",
+            "is_active",
+            "preview_json",
+            "schema_json",
+            "transformation_log",
+            "transformation_plan_json",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_name(self, obj):
+        if obj.file:
+            return os.path.basename(obj.file.name)
+        return f"{obj.dataset.name}_v{obj.version_number}"
+
+    def get_rows(self, obj):
+        return len(obj.preview_rows or []) if not obj.file else obj.dataset.row_count
+
+    def get_columns_count(self, obj):
+        return len(obj.columns or []) or obj.dataset.column_count
+
+    def get_column_count(self, obj):
+        return self.get_columns_count(obj)
+
+    def get_file_size(self, obj):
+        if not obj.file:
+            return None
+        try:
+            return obj.file.size
+        except (OSError, ValueError):
+            return None
+
+    def get_pipeline_stage(self, obj):
+        return _version_stage_label(obj.version_type)
+
+    def get_status(self, obj):
+        return "ML Ready" if obj.version_type == DatasetVersion.VERSION_TYPE_ML_READY else "Ready"
+
+    def get_preview_json(self, obj):
+        return {"columns": obj.columns or [], "rows": obj.preview_rows or []}
+
+    def get_schema_json(self, obj):
+        return obj.columns or []
 
 
 class DatasetUploadSerializer(serializers.Serializer):

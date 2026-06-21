@@ -163,7 +163,7 @@ class ManualFeatureSavePlaceholderView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, dataset_id):
-        get_object_or_404(Dataset, id=dataset_id, owner=request.user)
+        dataset = get_object_or_404(Dataset, id=dataset_id, owner=request.user)
 
         serializer = ManualFeatureSavePlaceholderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

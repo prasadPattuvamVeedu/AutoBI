@@ -59,6 +59,7 @@ class ChartGenerateSerializer(serializers.Serializer):
     color_by_column = serializers.CharField(required=False, allow_blank=True)
     aggregation = serializers.CharField(required=False, allow_blank=True)
     top_n = serializers.IntegerField(required=False, min_value=1, max_value=1000)
+    bins = serializers.IntegerField(required=False, min_value=1, max_value=100)
     sort_order = serializers.CharField(required=False, allow_blank=True)
     title = serializers.CharField(required=False, allow_blank=True)
     columns = serializers.ListField(child=serializers.CharField(), required=False)
@@ -71,3 +72,4 @@ class ChartNoteSerializer(serializers.Serializer):
     content = serializers.CharField(required=False, allow_blank=True)
     mode = serializers.CharField(required=False, allow_blank=True, default="note")
     is_visible = serializers.BooleanField(required=False, default=True)
+
