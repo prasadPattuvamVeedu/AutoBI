@@ -20,6 +20,11 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me-to-at-least-32-ch
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DATASET_LARGE_FILE_WARNING_BYTES = int(
     os.getenv("DATASET_LARGE_FILE_WARNING_BYTES", str(50 * 1024 * 1024))
 )
@@ -39,9 +44,11 @@ INSTALLED_APPS = [
     "apps.security.apps.SecurityConfig",
     "apps.connectors.apps.ConnectorsConfig",
     "apps.recommendations.apps.RecommendationsConfig",
+    "apps.ai.apps.AiConfig",
     "apps.datasets",
     "apps.profiling",
     "apps.cleaning",
+    "apps.eda",
     "apps.preprocessing",
     "apps.charts",
     "apps.statistics_engine",

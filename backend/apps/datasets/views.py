@@ -224,6 +224,97 @@ class DatasetDetailView(generics.RetrieveDestroyAPIView):
                 logger.warning("Could not delete dataset file %s", file_name, exc_info=True)
 
 
+class DatasetSemanticSchemaApplyView(APIView):
+    """Approve/edit semantic schema metadata and persist it on the dataset profile.
+
+    This does not alter raw data values. It saves column-level metadata so the
+    next AutoBI stages can use the approved meaning of each column.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id):
+        try:
+            dataset = Dataset.objects.get(pk=id, owner=request.user)
+        except Dataset.DoesNotExist:
+            return Response({"detail": "Dataset not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        column_name = request.data.get("column") or request.data.get("column_name")
+        semantic_type = request.data.get("semantic_type") or request.data.get("ai_semantic_type")
+        raw_dtype = request.data.get("raw_dtype") or request.data.get("approved_raw_dtype") or request.data.get("selected_raw_dtype")
+        recommendation = request.data.get("recommendation") or request.data.get("ai_recommendation")
+        confidence = request.data.get("confidence") or request.data.get("ai_confidence")
+
+        if not column_name or (not semantic_type and not raw_dtype):
+            return Response(
+                {"detail": "column and semantic_type or raw_dtype are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        def update_rows(rows):
+            updated = False
+            next_rows = []
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    next_rows.append(row)
+                    continue
+                next_row = dict(row)
+                if str(next_row.get("column_name") or next_row.get("name") or "") == str(column_name):
+                    if semantic_type:
+                        next_row["approved_semantic_type"] = semantic_type
+                        next_row["ai_semantic_type"] = semantic_type
+                        next_row["ai_data_category"] = semantic_type
+                        next_row["approved_recommendation"] = recommendation or next_row.get("ai_recommendation")
+                        next_row["ai_recommendation"] = recommendation or next_row.get("ai_recommendation")
+                        next_row["semantic_status"] = "applied"
+                    if raw_dtype:
+                        next_row["approved_raw_dtype"] = raw_dtype
+                        next_row["ai_raw_dtype"] = raw_dtype
+                        next_row["raw_dtype_status"] = "applied"
+                    next_row["ai_confidence"] = confidence or next_row.get("ai_confidence")
+                    next_row["forward_to_next_processing"] = True
+                    updated = True
+                next_rows.append(next_row)
+            return next_rows, updated
+
+        with transaction.atomic():
+            columns_json, updated_columns = update_rows(dataset.columns_json or [])
+            if updated_columns:
+                dataset.columns_json = columns_json
+                dataset.save(update_fields=["columns_json", "updated_at"])
+
+            profile, _ = DatasetProfile.objects.get_or_create(dataset=dataset)
+            profile_json = profile.profile_json or {}
+            profile_columns, updated_profile = update_rows(profile_json.get("columns") or profile_json.get("column_profiles") or [])
+            if profile_columns:
+                profile_json["columns"] = profile_columns
+
+            semantic_map = dict(profile_json.get("semantic_schema") or {})
+            existing_schema_item = semantic_map.get(str(column_name)) if isinstance(semantic_map.get(str(column_name)), dict) else {}
+            semantic_map[str(column_name)] = {
+                **existing_schema_item,
+                **({"semantic_type": semantic_type, "ai_data_category": semantic_type, "status": "applied"} if semantic_type else {}),
+                **({"raw_dtype": raw_dtype, "approved_raw_dtype": raw_dtype, "raw_dtype_status": "applied"} if raw_dtype else {}),
+                "recommendation": recommendation or existing_schema_item.get("recommendation"),
+                "confidence": confidence or existing_schema_item.get("confidence"),
+                "forward_to_next_processing": True,
+            }
+            profile_json["semantic_schema"] = semantic_map
+            profile_json["active_schema_metadata"] = semantic_map
+            profile.profile_json = profile_json
+            profile.save(update_fields=["profile_json", "updated_at"])
+
+        return Response({
+            "column": column_name,
+            "semantic_type": semantic_type,
+            "raw_dtype": raw_dtype,
+            "recommendation": recommendation,
+            "confidence": confidence,
+            "status": "applied",
+            "forward_to_next_processing": True,
+            "semantic_schema": profile.profile_json.get("semantic_schema", {}),
+        })
+
+
 class TransformedDatasetListView(APIView):
     permission_classes = [IsAuthenticated]
 

@@ -55,7 +55,17 @@ class GoogleAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        credential = request.data.get("credential")
+        # Google Identity Services returns an ID token in `credential`.
+        # Keep token/access_token aliases so older frontend builds do not fail.
+        credential = (
+            request.data.get("credential")
+            or request.data.get("token")
+            or request.data.get("id_token")
+            or request.data.get("access_token")
+        )
+
+        if isinstance(credential, str):
+            credential = credential.strip()
 
         if not credential:
             return Response(
@@ -63,7 +73,8 @@ class GoogleAuthView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not settings.GOOGLE_CLIENT_ID:
+        configured_client_id = (settings.GOOGLE_CLIENT_ID or "").strip()
+        if not configured_client_id:
             return Response(
                 {"detail": "GOOGLE_CLIENT_ID is missing from backend configuration."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -73,13 +84,21 @@ class GoogleAuthView(APIView):
             token_info = id_token.verify_oauth2_token(
                 credential,
                 google_requests.Request(),
-                settings.GOOGLE_CLIENT_ID,
+                configured_client_id,
+                clock_skew_in_seconds=10,
             )
-        except ValueError:
-            return Response(
-                {"credential": "Invalid Google credential."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        except ValueError as exc:
+            response_data = {
+                "credential": "Invalid Google credential.",
+                "hint": (
+                    "Check that frontend VITE_GOOGLE_CLIENT_ID and backend "
+                    "GOOGLE_CLIENT_ID are the same OAuth Web Client ID, and that "
+                    "http://localhost:5173 is added to Authorized JavaScript origins."
+                ),
+            }
+            if settings.DEBUG:
+                response_data["debug"] = str(exc)
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
         email = token_info.get("email")
         if not email:

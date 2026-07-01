@@ -4,6 +4,7 @@ from .views import (
     DatasetDetailView,
     DatasetListView,
     DatasetPreviewView,
+    DatasetSemanticSchemaApplyView,
     DatasetProfileView,
     DatasetUploadView,
     DatasetTransformedVersionsView,
@@ -25,5 +26,6 @@ urlpatterns = [
     path("<int:id>/transformed/", DatasetTransformedVersionsView.as_view(), name="dataset-transformed-versions"),
     path("<int:id>/preview/", DatasetPreviewView.as_view(), name="dataset-preview"),
     path("<int:id>/profile/", DatasetProfileView.as_view(), name="dataset-profile"),
+    path("<int:id>/semantic-schema/apply/", DatasetSemanticSchemaApplyView.as_view(), name="dataset-semantic-schema-apply"),
     path("<int:id>/cleaning/", include("apps.cleaning.urls")),
 ]
